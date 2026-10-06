@@ -1,164 +1,425 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ledger – business finances</title>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-:root{--bg:#f3f5f1;--card:#fff;--ink:#17231d;--mute:#64736a;--line:#dde4de;--g:#1f6b4a;--r:#b3402e;--b:#2b5d8a}
-@media(prefers-color-scheme:dark){:root{--bg:#121a16;--card:#1a251f;--ink:#e8efe9;--mute:#8fa196;--line:#2b3a31;--g:#52c08a;--r:#e8806c;--b:#7db3e6}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,system-ui,sans-serif}
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--card)}
-h1{font:600 24px Fraunces,Georgia,serif;margin:0}
-nav{display:flex;gap:4px;flex-wrap:wrap}
-nav button{background:none;border:0;padding:8px 14px;border-radius:8px;font:inherit;color:var(--mute);cursor:pointer}
-nav button.on{background:var(--ink);color:var(--bg)}
-main{max-width:1000px;margin:0 auto;padding:24px 16px}
-.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px;overflow-x:auto}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
-.big{font:600 30px Fraunces,Georgia,serif}.mute{color:var(--mute);font-size:13px}
-.pos{color:var(--g)}.neg{color:var(--r)}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}
-th{font-weight:500;color:var(--mute);font-size:13px}td.n,th.n{text-align:right}
-tr.c{cursor:pointer}tr.c:hover{background:var(--bg)}
-button.p,button.s{font:inherit;padding:8px 14px;border-radius:8px;cursor:pointer;border:1px solid var(--ink)}
-button.p{background:var(--ink);color:var(--bg)}button.s{background:none;color:var(--ink)}
-input,select,textarea{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);width:100%}
-label{display:block;font-size:13px;color:var(--mute)}
-.f{display:grid;grid-template-columns:1fr 1fr;gap:10px}.f .w{grid-column:1/-1}
-dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);width:min(560px,95vw);padding:20px}
-dialog::backdrop{background:#0008}
-.bar{height:8px;background:var(--b);border-radius:4px}
-.thumb{max-width:100%;max-height:220px;border-radius:8px;margin-top:8px}
-:focus-visible{outline:2px solid var(--b);outline-offset:2px}
-</style></head><body>
-<header><h1>Ledger</h1>
-<nav id="nav"></nav></header>
-<main id="m"></main>
-<dialog id="dlg"></dialog>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script>
-const $=s=>document.querySelector(s),uid=()=>Math.random().toString(36).slice(2,9);
-const fm=n=>(n<0?'-':'')+'$'+Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-const def={acc:[{id:'a1',name:'Business Debit',kind:'debit'},{id:'a2',name:'Business Credit Card',kind:'credit'}],ev:[],tx:[],cats:['Sales','Supplies','Food & Ingredients','Booth/Venue Fees','Fuel & Travel','Equipment','Marketing','Software','Insurance & Fees','Other']};
-const initialMonth=new Date().toISOString().slice(0,7);
-let D=def, tab='Dashboard', month=initialMonth, filterYear=initialMonth.slice(0,4), filterMonth=initialMonth.slice(5), filterMode='preset', customStart='', customEnd='', sel=new Set();
-// ===== PASTE YOUR SUPABASE SETTINGS HERE =====
-const SUPABASE_URL='https://wdjmnostrphjiefqcgry.supabase.co', SUPABASE_KEY='sb_publishable_R__tdfAewsx6tCA-S24tZg_kmKv4YzQ';
-// =============================================
-const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
-let snap={},legacyMode=false;
-const tableRows=()=>({
-  accounts:D.acc,
-  events:D.ev,
-  categories:D.cats.map(name=>({name})),
-  transactions:D.tx.map(t=>({id:t.id,type:t.type,date:t.date,amt:t.amt,acct:t.acct,to_account:t.to||null,vendor:t.vendor||'',loc:t.loc||'',cat:t.cat||'',event_id:t.ev||null,note:t.note||'',receipt_id:t.rid||null}))
-});
-const rowKey=(table,row)=>table=='categories'?'categories:'+row.name:table+':'+row.id;
-async function save(){const rows=tableRows(),now={};Object.entries(rows).forEach(([table,list])=>list.forEach(row=>now[rowKey(table,row)]=JSON.stringify(row)));
-  if(legacyMode){const R=[...D.acc.map(x=>['acc',x]),...D.ev.map(x=>['ev',x]),...D.tx.map(x=>['tx',x]),['cfg',{id:'cats',list:D.cats}]].map(([kind,data])=>({id:kind+':'+data.id,kind,data}));
-    const oldNow={};R.forEach(r=>oldNow[r.id]=JSON.stringify(r.data));const up=R.filter(r=>snap[r.id]!==oldNow[r.id]),del=Object.keys(snap).filter(id=>!(id in oldNow));
-    if(up.length){const{error}=await sb.from('records').upsert(up);if(error)return alert('Not saved: '+error.message)}if(del.length)await sb.from('records').delete().in('id',del);snap=oldNow;return}
-  for(const [table,list] of Object.entries(rows)){const up=list.filter(row=>snap[rowKey(table,row)]!==JSON.stringify(row));
-    if(up.length){const{error}=await sb.from(table).upsert(up);if(error)return alert('Not saved: '+error.message)}}
-  for(const table of Object.keys(rows)){const ids=Object.keys(snap).filter(key=>key.startsWith(table+':')&&!now[key]).map(key=>key.slice(table.length+1));
-    if(ids.length){const{error}=await sb.from(table).delete().in(table=='categories'?'name':'id',ids);if(error)return alert('Not saved: '+error.message)}}
-  snap=now}
-function setLegacyData(data){const g=k=>data.filter(r=>r.kind==k).map(r=>r.data),c=g('cfg')[0];
-  D={acc:g('acc'),ev:g('ev'),tx:g('tx'),cats:c?c.list:def.cats};if(!D.acc.length)D.acc=def.acc}
-async function load(){const result=await Promise.all(['accounts','events','categories','transactions'].map(table=>sb.from(table).select('*')));
-  if(result.some(r=>r.error)){const legacy=await sb.from('records').select('id,kind,data');if(legacy.error)return alert('Could not load: '+result.find(r=>r.error).error.message);legacyMode=true;setLegacyData(legacy.data);snap={};legacy.data.forEach(r=>snap[r.id]=JSON.stringify(r.data));return render()}
-  const[accounts,events,categories,transactions]=result.map(r=>r.data);
-  if(!accounts.length&&!events.length&&!categories.length&&!transactions.length){const legacy=await sb.from('records').select('id,kind,data');
-    if(legacy.data&&legacy.data.length){setLegacyData(legacy.data);snap={};legacyMode=false;await save();return render()}}
-  legacyMode=false;
-  D={acc:accounts,ev:events,tx:transactions.map(t=>({...t,to:t.to_account||'',ev:t.event_id||'',rid:t.receipt_id||''})),cats:categories.map(c=>c.name)};if(!D.acc.length)D.acc=def.acc;if(!D.cats.length)D.cats=def.cats;
-  snap={};Object.entries(tableRows()).forEach(([table,list])=>list.forEach(row=>snap[rowKey(table,row)]=JSON.stringify(row)));render()}
-async function boot(){const{data:{session}}=await sb.auth.getSession();if(!session)return loginUI();await load()}
-function loginUI(){$('#nav').innerHTML='';$('#m').innerHTML=`<div class="card" style="max-width:360px;margin:40px auto"><b>Sign in</b><div class="f"><label class="w">Email<input id="li_e" type="email" autocomplete="username"></label><label class="w">Password<input id="li_p" type="password" autocomplete="current-password" onkeydown="if(event.key=='Enter')login()"></label></div><div class="row" style="margin:12px 0 0"><button class="p" onclick="login()">Sign in</button></div><p id="li_m" class="neg"></p></div>`}
-async function login(){const{error}=await sb.auth.signInWithPassword({email:$('#li_e').value,password:$('#li_p').value});if(error)$('#li_m').textContent=error.message;else boot()}
-// receipt photos live in Supabase Storage (private bucket 'receipts')
-const rput=async(k,u)=>{const b=await(await fetch(u)).blob();await sb.storage.from('receipts').upload(k+'.jpg',b,{upsert:true,contentType:'image/jpeg'})};
-const rdel=k=>sb.storage.from('receipts').remove([k+'.jpg']);
-const rget=async k=>{const{data}=await sb.storage.from('receipts').createSignedUrl(k+'.jpg',3600);return data&&data.signedUrl};
-const shrink=f=>new Promise(r=>{const i=new Image();i.onload=()=>{const s=Math.min(1,1400/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);r(c.toDataURL('image/jpeg',.8))};i.src=URL.createObjectURL(f)});
-async function scan(url){
-  const k=localStorage.getItem('bf_key');if(!k)return null;
-  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-  body:JSON.stringify({model:'claude-sonnet-5-5',max_tokens:500,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/jpeg',data:url.split(',')[1]}},{type:'text',text:'Read this receipt. Reply ONLY with JSON: {"vendor":"","date":"YYYY-MM-DD","amount":0,"location":"city/address","category":"one of: '+D.cats.join(', ')+'","note":"short reason/summary of items"}'}]}]})});
-  const j=await r.json();return JSON.parse(j.content[0].text.replace(/```json|```/g,'').trim());}
-// ---- calculations
-const acc=id=>D.acc.find(a=>a.id==id)||{name:'(deleted)'},evn=id=>(D.ev.find(e=>e.id==id)||{}).name||'';
-function bal(a){let b=0;D.tx.forEach(t=>{
-  if(a.kind=='credit'){if(t.acct==a.id&&t.type=='expense')b+=t.amt;if(t.to==a.id)b-=t.amt;if(t.acct==a.id&&t.type=='income')b-=t.amt}
-  else{if(t.acct==a.id){b+=t.type=='income'?t.amt:-t.amt}if(t.to==a.id)b+=t.amt}});return b}
-const inM=t=>filterMode=='custom'?(!customStart||t.date>=customStart)&&(!customEnd||t.date<=customEnd):!month||t.date.startsWith(month);
-function sums(list){let i=0,e=0;list.forEach(t=>{if(t.type=='income')i+=t.amt;if(t.type=='expense')e+=t.amt});return{i,e,n:i-e}}
-// ---- views
-function render(){
-  $('#nav').innerHTML=['Dashboard','Transactions','Events','Accounts','Settings'].map(t=>`<button class="${t==tab?'on':''}" onclick="tab='${t}';render()">${t}</button>`).join('');
-  $('#m').innerHTML=V[tab]();}
-function setMonthFilter(){filterYear=$('#filter_year').value;filterMonth=$('#filter_month').value;filterMode='preset';month=filterYear&&filterMonth?filterYear+'-'+filterMonth:'';render()}
-function setFilterMode(){filterMode=$('#filter_mode').value;render()}
-function applyCustomFilter(){customStart=$('#filter_start').value;customEnd=$('#filter_end').value;month='';filterMode='custom';render()}
-function clearFilter(){filterYear='';filterMonth='';month='';customStart='';customEnd='';filterMode='preset';render()}
-const mfilter=()=>{const years=new Set([new Date().getFullYear()]);[...D.tx,...D.ev].forEach(x=>{if(x.date)years.add(+x.date.slice(0,4))});const yearOptions=[...years].sort((a,b)=>b-a).map(y=>`<option value="${y}" ${filterYear==y?'selected':''}>${y}</option>`).join('');const monthOptions=Array.from({length:12},(_,i)=>{const value=String(i+1).padStart(2,'0');return`<option value="${value}" ${filterMonth==value?'selected':''}>${new Date(2000,i,2).toLocaleDateString(undefined,{month:'long'})}</option>`}).join('');const controls=filterMode=='preset'?`<label>Month <select id="filter_month" onchange="setMonthFilter()" style="width:auto"><option value="" ${!filterMonth?'selected':''}>All months</option>${monthOptions}</select></label><label>Year <select id="filter_year" onchange="setMonthFilter()" style="width:auto"><option value="" ${!filterYear?'selected':''}>All years</option>${yearOptions}</select></label>`:`<label>Start date <input id="filter_start" type="date" value="${customStart}" style="width:auto"></label><label>End date <input id="filter_end" type="date" value="${customEnd}" style="width:auto"></label><button class="p" onclick="applyCustomFilter()">Apply date range</button>`;return`<div class="row"><label>Filter by <select id="filter_mode" onchange="setFilterMode()" style="width:auto"><option value="preset" ${filterMode=='preset'?'selected':''}>Month and year</option><option value="custom" ${filterMode=='custom'?'selected':''}>Custom date range</option></select></label>${controls}<button class="s" onclick="clearFilter()">Clear filters</button></div>`};
-const V={
-Dashboard(){const L=D.tx.filter(inM),s=sums(L),cat={};L.filter(t=>t.type=='expense').forEach(t=>cat[t.cat||'Other']=(cat[t.cat||'Other']||0)+t.amt);
-  const mx=Math.max(1,...Object.values(cat));
-  return mfilter()+`<div class="grid"><div class="card"><div class="mute">Revenue</div><div class="big pos">${fm(s.i)}</div></div><div class="card"><div class="mute">Expenses</div><div class="big neg">${fm(s.e)}</div></div><div class="card"><div class="mute">Net profit</div><div class="big ${s.n<0?'neg':'pos'}">${fm(s.n)}</div></div></div>
-  <div class="grid">${D.acc.map(a=>`<div class="card"><div class="mute">${a.name}</div><div class="big">${fm(bal(a))}</div><div class="mute">${a.kind=='credit'?'owed on card':'available'}</div></div>`).join('')}</div>
-  <div class="card"><b>Spending by category</b>${Object.entries(cat).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="margin-top:10px"><div class="row" style="justify-content:space-between;margin:0"><span>${k}</span><span>${fm(v)}</span></div><div class="bar" style="width:${v/mx*100}%"></div></div>`).join('')||'<p class="mute">No expenses this period. Add one under Transactions.</p>'}</div>`},
-Transactions(){const L=D.tx.filter(inM).sort((a,b)=>b.date.localeCompare(a.date));
-  return mfilter()+`<div class="row"><button class="p" onclick="edit()">Add transaction</button></div><div class="card"><table><tr><th>Date<th>Vendor<th>Category<th>Account<th>Event<th class="n">Amount<th></tr>${L.map(t=>`<tr class="c" onclick="edit('${t.id}')"><td>${t.date}<td>${t.vendor||(t.type=='payment'?'Card payment':'')}<td>${t.cat||''}<td>${acc(t.acct).name}${t.to?' → '+acc(t.to).name:''}<td>${evn(t.ev)}<td class="n ${t.type=='income'?'pos':t.type=='expense'?'neg':''}">${t.type=='income'?'+':t.type=='expense'?'-':''}${fm(t.amt)}<td>${t.rid?'📎':''}</tr>`).join('')||'<tr><td colspan=7 class="mute">Nothing here yet.</tr>'}</table></div>`},
-Events(){const L=D.ev.filter(inM).sort((a,b)=>b.date.localeCompare(a.date));
-  const row=e=>sums(D.tx.filter(t=>t.ev==e.id)),pick=L.filter(e=>sel.has(e.id)),tot=pick.reduce((a,e)=>{const s=row(e);return{i:a.i+s.i,e:a.e+s.e}},{i:0,e:0});
-  return mfilter()+`<div class="row"><button class="p" onclick="editEv()">Add event</button></div>
-  ${pick.length?`<div class="card"><b>${pick.length} selected:</b> revenue <span class="pos">${fm(tot.i)}</span> · costs <span class="neg">${fm(tot.e)}</span> · net <b>${fm(tot.i-tot.e)}</b></div>`:''}
-  <div class="card"><table><tr><th><th>Date<th>Event<th class="n">Revenue<th class="n">Costs<th class="n">Net<th></tr>${L.map(e=>{const s=row(e);return`<tr><td><input type="checkbox" style="width:auto" ${sel.has(e.id)?'checked':''} onchange="this.checked?sel.add('${e.id}'):sel.delete('${e.id}');render()"><td>${e.date}<td>${e.name}<td class="n pos">${fm(s.i)}<td class="n neg">${fm(s.e)}<td class="n">${fm(s.n)}<td><button class="s" onclick="editEv('${e.id}')">Edit</button></tr>`}).join('')||'<tr><td colspan=7 class="mute">No events this period. Tick events to total them together.</tr>'}</table></div>`},
-Accounts(){return`<div class="row"><button class="p" onclick="editAcc()">Add account or card</button><button class="s" onclick="pay()">Pay off a card</button></div><div class="card"><table><tr><th>Name<th>Type<th class="n">Balance<th></tr>${D.acc.map(a=>`<tr><td>${a.name}<td>${a.kind}<td class="n">${fm(bal(a))}<td><button class="s" onclick="editAcc('${a.id}')">Rename</button></tr>`).join('')}</table></div><p class="mute">Credit card balance = what you owe. Charge purchases to the card, then record a card payment from your debit account to lower it.</p>`},
-Settings(){return`<div class="card"><b>Your data</b><p class="mute">Saved to typed cloud tables and shared with everyone who can sign in. Existing data stays in the legacy records table until migration. Run <b>supabase-migration.sql</b> once in Supabase to copy it without deleting anything. Backups cover all records; receipt photos stay in cloud storage.</p><div class="row"><button class="p" onclick="backup()">Download backup (.json)</button><button class="s" onclick="csv()">Export CSV</button><button class="s" onclick="sb.auth.signOut().then(boot)">Sign out</button><label class="s" style="border:1px solid var(--ink);padding:8px 14px;border-radius:8px;color:var(--ink);cursor:pointer">Restore backup<input type="file" accept=".json" hidden onchange="restore(this.files[0])"></label></div></div>
-  <div class="card"><b>Auto-fill from receipt photos</b><p class="mute">Paste an Anthropic API key and receipts are read automatically (vendor, date, total, location, reason). The key stays in this browser and is sent only to Anthropic. Without a key, photos are still stored with each transaction.</p><input type="password" id="key" placeholder="sk-ant-..." value="${localStorage.getItem('bf_key')||''}" onchange="localStorage.setItem('bf_key',this.value.trim())"></div>
-  <div class="card"><b>Categories</b><p class="mute">Comma separated.</p><input value="${D.cats.join(', ')}" onchange="D.cats=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()"></div>`}};
-// ---- dialogs
-const opt=(a,v,k)=>a.map(x=>`<option value="${x.id||x}" ${(x.id||x)==v?'selected':''}>${x.name||x}</option>`).join('');
-let pend=null;
-async function edit(id){const t=D.tx.find(x=>x.id==id)||{type:'expense',date:new Date().toISOString().slice(0,10),amt:'',acct:D.acc[0].id,cat:D.cats[1]};
-  pend={rid:t.rid,img:null,del:false};const img=t.rid?await rget(t.rid):null;
-  $('#dlg').innerHTML=`<div class="f"><label>Type<select id="t_type" onchange="$('#t_to').parentElement.style.display=this.value=='payment'?'':'none'"><option value="expense" ${t.type=='expense'?'selected':''}>Expense</option><option value="income" ${t.type=='income'?'selected':''}>Revenue</option><option value="payment" ${t.type=='payment'?'selected':''}>Card payment</option></select></label>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ledger – business finances</title>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600&family=Inter:wght@400;500;600&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f3f5f1;
+      --card: #fff;
+      --ink: #17231d;
+      --mute: #64736a;
+      --line: #dde4de;
+      --g: #1f6b4a;
+      --r: #b3402e;
+      --b: #2b5d8a
+    }
+
+    @media(prefers-color-scheme:dark) {
+      :root {
+        --bg: #121a16;
+        --card: #1a251f;
+        --ink: #e8efe9;
+        --mute: #8fa196;
+        --line: #2b3a31;
+        --g: #52c08a;
+        --r: #e8806c;
+        --b: #7db3e6
+      }
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.5 Inter, system-ui, sans-serif
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--card)
+    }
+
+    h1 {
+      font: 600 24px Fraunces, Georgia, serif;
+      margin: 0
+    }
+
+    nav {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap
+    }
+
+    nav button {
+      background: none;
+      border: 0;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font: inherit;
+      color: var(--mute);
+      cursor: pointer
+    }
+
+    nav button.on {
+      background: var(--ink);
+      color: var(--bg)
+    }
+
+    main {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 24px 16px
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 16px
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+      overflow-x: auto
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px
+    }
+
+    .big {
+      font: 600 30px Fraunces, Georgia, serif
+    }
+
+    .mute {
+      color: var(--mute);
+      font-size: 13px
+    }
+
+    .pos {
+      color: var(--g)
+    }
+
+    .neg {
+      color: var(--r)
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap
+    }
+
+    th {
+      font-weight: 500;
+      color: var(--mute);
+      font-size: 13px
+    }
+
+    td.n,
+    th.n {
+      text-align: right
+    }
+
+    tr.c {
+      cursor: pointer
+    }
+
+    tr.c:hover {
+      background: var(--bg)
+    }
+
+    button.p,
+    button.s {
+      font: inherit;
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid var(--ink)
+    }
+
+    button.p {
+      background: var(--ink);
+      color: var(--bg)
+    }
+
+    button.s {
+      background: none;
+      color: var(--ink)
+    }
+
+    input,
+    select,
+    textarea {
+      font: inherit;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--ink);
+      width: 100%
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--mute)
+    }
+
+    .f {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px
+    }
+
+    .f .w {
+      grid-column: 1/-1
+    }
+
+    dialog {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      color: var(--ink);
+      width: min(560px, 95vw);
+      padding: 20px
+    }
+
+    dialog::backdrop {
+      background: #0008
+    }
+
+    .bar {
+      height: 8px;
+      background: var(--b);
+      border-radius: 4px
+    }
+
+    .thumb {
+      max-width: 100%;
+      max-height: 220px;
+      border-radius: 8px;
+      margin-top: 8px
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--b);
+      outline-offset: 2px
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Ledger</h1>
+    <nav id="nav"></nav>
+  </header>
+  <main id="m"></main>
+  <dialog id="dlg"></dialog>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+    const $ = s => document.querySelector(s), uid = () => Math.random().toString(36).slice(2, 9);
+    const fm = n => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const def = { acc: [{ id: 'a1', name: 'Business Debit', kind: 'debit' }, { id: 'a2', name: 'Business Credit Card', kind: 'credit' }], ev: [], tx: [], cats: ['Sales', 'Supplies', 'Food & Ingredients', 'Booth/Venue Fees', 'Fuel & Travel', 'Equipment', 'Marketing', 'Software', 'Insurance & Fees', 'Other'] };
+    const initialMonth = new Date().toISOString().slice(0, 7);
+    let D = def, tab = 'Dashboard', month = initialMonth, filterYear = initialMonth.slice(0, 4), filterMonth = initialMonth.slice(5), filterMode = 'preset', customStart = '', customEnd = '', filterCategory = '', filterType = '', filterEvent = '', sel = new Set();
+    // ===== PASTE YOUR SUPABASE SETTINGS HERE =====
+    const SUPABASE_URL = 'https://wdjmnostrphjiefqcgry.supabase.co', SUPABASE_KEY = 'sb_publishable_R__tdfAewsx6tCA-S24tZg_kmKv4YzQ';
+    // =============================================
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    let snap = {}, legacyMode = false;
+    const tableRows = () => ({
+      accounts: D.acc,
+      events: D.ev,
+      categories: D.cats.map(name => ({ name })),
+      transactions: D.tx.map(t => ({ id: t.id, type: t.type, date: t.date, amt: t.amt, acct: t.acct, to_account: t.to || null, vendor: t.vendor || '', loc: t.loc || '', cat: t.cat || '', event_id: t.ev || null, note: t.note || '', receipt_id: t.rid || null }))
+    });
+    const rowKey = (table, row) => table == 'categories' ? 'categories:' + row.name : table + ':' + row.id;
+    async function save() {
+      const rows = tableRows(), now = {}; Object.entries(rows).forEach(([table, list]) => list.forEach(row => now[rowKey(table, row)] = JSON.stringify(row)));
+      if (legacyMode) {
+        const R = [...D.acc.map(x => ['acc', x]), ...D.ev.map(x => ['ev', x]), ...D.tx.map(x => ['tx', x]), ['cfg', { id: 'cats', list: D.cats }]].map(([kind, data]) => ({ id: kind + ':' + data.id, kind, data }));
+        const oldNow = {}; R.forEach(r => oldNow[r.id] = JSON.stringify(r.data)); const up = R.filter(r => snap[r.id] !== oldNow[r.id]), del = Object.keys(snap).filter(id => !(id in oldNow));
+        if (up.length) { const { error } = await sb.from('records').upsert(up); if (error) return alert('Not saved: ' + error.message) } if (del.length) await sb.from('records').delete().in('id', del); snap = oldNow; return
+      }
+      for (const [table, list] of Object.entries(rows)) {
+        const up = list.filter(row => snap[rowKey(table, row)] !== JSON.stringify(row));
+        if (up.length) { const { error } = await sb.from(table).upsert(up); if (error) return alert('Not saved: ' + error.message) }
+      }
+      for (const table of Object.keys(rows)) {
+        const ids = Object.keys(snap).filter(key => key.startsWith(table + ':') && !now[key]).map(key => key.slice(table.length + 1));
+        if (ids.length) { const { error } = await sb.from(table).delete().in(table == 'categories' ? 'name' : 'id', ids); if (error) return alert('Not saved: ' + error.message) }
+      }
+      snap = now
+    }
+    function setLegacyData(data) {
+      const g = k => data.filter(r => r.kind == k).map(r => r.data), c = g('cfg')[0];
+      D = { acc: g('acc'), ev: g('ev'), tx: g('tx'), cats: c ? c.list : def.cats }; if (!D.acc.length) D.acc = def.acc
+    }
+    async function load() {
+      const result = await Promise.all(['accounts', 'events', 'categories', 'transactions'].map(table => sb.from(table).select('*')));
+      if (result.some(r => r.error)) { const legacy = await sb.from('records').select('id,kind,data'); if (legacy.error) return alert('Could not load: ' + result.find(r => r.error).error.message); legacyMode = true; setLegacyData(legacy.data); snap = {}; legacy.data.forEach(r => snap[r.id] = JSON.stringify(r.data)); return render() }
+      const [accounts, events, categories, transactions] = result.map(r => r.data);
+      if (!accounts.length && !events.length && !categories.length && !transactions.length) {
+        const legacy = await sb.from('records').select('id,kind,data');
+        if (legacy.data && legacy.data.length) { setLegacyData(legacy.data); snap = {}; legacyMode = false; await save(); return render() }
+      }
+      legacyMode = false;
+      D = { acc: accounts, ev: events, tx: transactions.map(t => ({ ...t, to: t.to_account || '', ev: t.event_id || '', rid: t.receipt_id || '' })), cats: categories.map(c => c.name) }; if (!D.acc.length) D.acc = def.acc; if (!D.cats.length) D.cats = def.cats;
+      snap = {}; Object.entries(tableRows()).forEach(([table, list]) => list.forEach(row => snap[rowKey(table, row)] = JSON.stringify(row))); render()
+    }
+    async function boot() { const { data: { session } } = await sb.auth.getSession(); if (!session) return loginUI(); await load() }
+    function loginUI() { $('#nav').innerHTML = ''; $('#m').innerHTML = `<div class="card" style="max-width:360px;margin:40px auto"><b>Sign in</b><div class="f"><label class="w">Email<input id="li_e" type="email" autocomplete="username"></label><label class="w">Password<input id="li_p" type="password" autocomplete="current-password" onkeydown="if(event.key=='Enter')login()"></label></div><div class="row" style="margin:12px 0 0"><button class="p" onclick="login()">Sign in</button></div><p id="li_m" class="neg"></p></div>` }
+    async function login() { const { error } = await sb.auth.signInWithPassword({ email: $('#li_e').value, password: $('#li_p').value }); if (error) $('#li_m').textContent = error.message; else boot() }
+    // receipt photos live in Supabase Storage (private bucket 'receipts')
+    const rput = async (k, u) => { const b = await (await fetch(u)).blob(); await sb.storage.from('receipts').upload(k + '.jpg', b, { upsert: true, contentType: 'image/jpeg' }) };
+    const rdel = k => sb.storage.from('receipts').remove([k + '.jpg']);
+    const rget = async k => { const { data } = await sb.storage.from('receipts').createSignedUrl(k + '.jpg', 3600); return data && data.signedUrl };
+    const shrink = f => new Promise(r => { const i = new Image(); i.onload = () => { const s = Math.min(1, 1400 / Math.max(i.width, i.height)), c = document.createElement('canvas'); c.width = i.width * s; c.height = i.height * s; c.getContext('2d').drawImage(i, 0, 0, c.width, c.height); r(c.toDataURL('image/jpeg', .8)) }; i.src = URL.createObjectURL(f) });
+    async function scan(url) {
+      const k = localStorage.getItem('bf_key'); if (!k) return null;
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': k, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 500, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: url.split(',')[1] } }, { type: 'text', text: 'Read this receipt. Reply ONLY with JSON: {"vendor":"","date":"YYYY-MM-DD","amount":0,"location":"city/address","category":"one of: ' + D.cats.join(', ') + '","note":"short reason/summary of items"}' }] }] })
+      });
+      const j = await r.json(); return JSON.parse(j.content[0].text.replace(/```json|```/g, '').trim());
+    }
+    // ---- calculations
+    const acc = id => D.acc.find(a => a.id == id) || { name: '(deleted)' }, evn = id => (D.ev.find(e => e.id == id) || {}).name || '';
+    function bal(a) {
+      let b = 0; D.tx.forEach(t => {
+        if (a.kind == 'credit') { if (t.acct == a.id && t.type == 'expense') b += t.amt; if (t.to == a.id) b -= t.amt; if (t.acct == a.id && t.type == 'income') b -= t.amt }
+        else { if (t.acct == a.id) { b += t.type == 'income' ? t.amt : -t.amt } if (t.to == a.id) b += t.amt }
+      }); return b
+    }
+    const inM = t => filterMode == 'custom' ? (!customStart || t.date >= customStart) && (!customEnd || t.date <= customEnd) : !month || t.date.startsWith(month);
+    function sums(list) { let i = 0, e = 0; list.forEach(t => { if (t.type == 'income') i += t.amt; if (t.type == 'expense') e += t.amt }); return { i, e, n: i - e } }
+    // ---- views
+    function render() {
+      $('#nav').innerHTML = ['Dashboard', 'Transactions', 'Events', 'Accounts', 'Reports', 'Settings'].map(t => `<button class="${t == tab ? 'on' : ''}" onclick="tab='${t}';render()">${t}</button>`).join('');
+      $('#m').innerHTML = V[tab]();
+    }
+    function setMonthFilter() { filterYear = $('#filter_year').value; filterMonth = $('#filter_month').value; filterMode = 'preset'; month = filterYear && filterMonth ? filterYear + '-' + filterMonth : ''; render() }
+    function setFilterMode() { filterMode = $('#filter_mode').value; render() }
+    function applyCustomFilter() { customStart = $('#filter_start').value; customEnd = $('#filter_end').value; month = ''; filterMode = 'custom'; render() }
+    function clearFilter() { filterYear = ''; filterMonth = ''; month = ''; customStart = ''; customEnd = ''; filterMode = 'preset'; filterCategory = ''; filterType = ''; filterEvent = ''; render() }
+    const mfilter = () => { const years = new Set([new Date().getFullYear()]);[...D.tx, ...D.ev].forEach(x => { if (x.date) years.add(+x.date.slice(0, 4)) }); const yearOptions = [...years].sort((a, b) => b - a).map(y => `<option value="${y}" ${filterYear == y ? 'selected' : ''}>${y}</option>`).join(''); const monthOptions = Array.from({ length: 12 }, (_, i) => { const value = String(i + 1).padStart(2, '0'); return `<option value="${value}" ${filterMonth == value ? 'selected' : ''}>${new Date(2000, i, 2).toLocaleDateString(undefined, { month: 'long' })}</option>` }).join(''); const controls = filterMode == 'preset' ? `<label>Month <select id="filter_month" onchange="setMonthFilter()" style="width:auto"><option value="" ${!filterMonth ? 'selected' : ''}>All months</option>${monthOptions}</select></label><label>Year <select id="filter_year" onchange="setMonthFilter()" style="width:auto"><option value="" ${!filterYear ? 'selected' : ''}>All years</option>${yearOptions}</select></label>` : `<label>Start date <input id="filter_start" type="date" value="${customStart}" style="width:auto"></label><label>End date <input id="filter_end" type="date" value="${customEnd}" style="width:auto"></label><button class="p" onclick="applyCustomFilter()">Apply date range</button>`; return `<div class="row"><label>Filter by <select id="filter_mode" onchange="setFilterMode()" style="width:auto"><option value="preset" ${filterMode == 'preset' ? 'selected' : ''}>Month and year</option><option value="custom" ${filterMode == 'custom' ? 'selected' : ''}>Custom date range</option></select></label>${controls}<button class="s" onclick="clearFilter()">Clear filters</button></div>` };
+    const txfilter = () => { const categoryOptions = D.cats.map(c => `<option value="${c}" ${filterCategory == c ? 'selected' : ''}>${c}</option>`).join(''), eventOptions = D.ev.map(e => `<option value="${e.id}" ${filterEvent == e.id ? 'selected' : ''}>${e.name}</option>`).join(''); return `<div class="row"><label>Category <select onchange="filterCategory=this.value;render()" style="width:auto"><option value="">All categories</option>${categoryOptions}</select></label><label>Transaction type <select onchange="filterType=this.value;render()" style="width:auto"><option value="">All types</option><option value="income" ${filterType == 'income' ? 'selected' : ''}>Revenue</option><option value="expense" ${filterType == 'expense' ? 'selected' : ''}>Expense</option><option value="payment" ${filterType == 'payment' ? 'selected' : ''}>Card payment</option></select></label><label>Event <select onchange="filterEvent=this.value;render()" style="width:auto"><option value="">All events</option>${eventOptions}</select></label></div>` };
+    const V = {
+      Dashboard() {
+        const L = D.tx.filter(inM), s = sums(L), cat = {}; L.filter(t => t.type == 'expense').forEach(t => cat[t.cat || 'Other'] = (cat[t.cat || 'Other'] || 0) + t.amt);
+        const mx = Math.max(1, ...Object.values(cat));
+        return mfilter() + `<div class="grid"><div class="card"><div class="mute">Revenue</div><div class="big pos">${fm(s.i)}</div></div><div class="card"><div class="mute">Expenses</div><div class="big neg">${fm(s.e)}</div></div><div class="card"><div class="mute">Net profit</div><div class="big ${s.n < 0 ? 'neg' : 'pos'}">${fm(s.n)}</div></div></div>
+  <div class="grid">${D.acc.map(a => `<div class="card"><div class="mute">${a.name}</div><div class="big">${fm(bal(a))}</div><div class="mute">${a.kind == 'credit' ? 'owed on card' : 'available'}</div></div>`).join('')}</div>
+  <div class="card"><b>Spending by category</b>${Object.entries(cat).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div style="margin-top:10px"><div class="row" style="justify-content:space-between;margin:0"><span>${k}</span><span>${fm(v)}</span></div><div class="bar" style="width:${v / mx * 100}%"></div></div>`).join('') || '<p class="mute">No expenses this period. Add one under Transactions.</p>'}</div>`
+      },
+      Transactions() {
+        const L = D.tx.filter(t => inM(t) && (!filterCategory || t.cat == filterCategory) && (!filterType || t.type == filterType) && (!filterEvent || t.ev == filterEvent)).sort((a, b) => b.date.localeCompare(a.date));
+        return mfilter() + txfilter() + `<div class="row"><button class="p" onclick="edit()">Add transaction</button></div><div class="card"><table><tr><th>Date<th>Vendor<th>Category<th>Account<th>Event<th class="n">Amount<th></tr>${L.map(t => `<tr class="c" onclick="edit('${t.id}')"><td>${t.date}<td>${t.vendor || (t.type == 'payment' ? 'Card payment' : '')}<td>${t.cat || ''}<td>${acc(t.acct).name}${t.to ? ' → ' + acc(t.to).name : ''}<td>${evn(t.ev)}<td class="n ${t.type == 'income' ? 'pos' : t.type == 'expense' ? 'neg' : ''}">${t.type == 'income' ? '+' : t.type == 'expense' ? '-' : ''}${fm(t.amt)}<td>${t.rid ? '📎' : ''}</tr>`).join('') || '<tr><td colspan=7 class="mute">Nothing here yet.</tr>'}</table></div>`
+      },
+      Events() {
+        const L = D.ev.filter(inM).sort((a, b) => b.date.localeCompare(a.date));
+        const row = e => sums(D.tx.filter(t => t.ev == e.id)), pick = L.filter(e => sel.has(e.id)), tot = pick.reduce((a, e) => { const s = row(e); return { i: a.i + s.i, e: a.e + s.e } }, { i: 0, e: 0 });
+        return mfilter() + `<div class="row"><button class="p" onclick="editEv()">Add event</button></div>
+  ${pick.length ? `<div class="card"><b>${pick.length} selected:</b> revenue <span class="pos">${fm(tot.i)}</span> · costs <span class="neg">${fm(tot.e)}</span> · net <b>${fm(tot.i - tot.e)}</b></div>` : ''}
+  <div class="card"><table><tr><th><th>Date<th>Event<th class="n">Revenue<th class="n">Costs<th class="n">Net<th></tr>${L.map(e => { const s = row(e); return `<tr><td><input type="checkbox" style="width:auto" ${sel.has(e.id) ? 'checked' : ''} onchange="this.checked?sel.add('${e.id}'):sel.delete('${e.id}');render()"><td>${e.date}<td>${e.name}<td class="n pos">${fm(s.i)}<td class="n neg">${fm(s.e)}<td class="n">${fm(s.n)}<td><button class="s" onclick="editEv('${e.id}')">Edit</button></tr>` }).join('') || '<tr><td colspan=7 class="mute">No events this period. Tick events to total them together.</tr>'}</table></div>`
+      },
+      Accounts() { return `<div class="row"><button class="p" onclick="editAcc()">Add account or card</button><button class="s" onclick="pay()">Pay off a card</button></div><div class="card"><table><tr><th>Name<th>Type<th class="n">Balance<th></tr>${D.acc.map(a => `<tr><td>${a.name}<td>${a.kind}<td class="n">${fm(bal(a))}<td><button class="s" onclick="editAcc('${a.id}')">Rename</button></tr>`).join('')}</table></div><p class="mute">Credit card balance = what you owe. Charge purchases to the card, then record a card payment from your debit account to lower it.</p>` },
+      Reports() { const L = D.tx.filter(inM).sort((a, b) => b.date.localeCompare(a.date)), s = sums(L); return mfilter() + `<div class="row"><div><b>Financial report</b><div class="mute">${reportPeriod()} · ${L.length} transaction${L.length == 1 ? '' : 's'}</div></div><span style="flex:1"></span><button class="p" onclick="exportExcel()">Export Excel</button><button class="s" onclick="printReport()">Export PDF</button></div><div class="grid"><div class="card"><div class="mute">Revenue</div><div class="big pos">${fm(s.i)}</div></div><div class="card"><div class="mute">Expenses</div><div class="big neg">${fm(s.e)}</div></div><div class="card"><div class="mute">Net profit</div><div class="big ${s.n < 0 ? 'neg' : 'pos'}">${fm(s.n)}</div></div></div><div class="card"><table><tr><th>Date<th>Type<th>Vendor / source<th>Category<th>Account<th>Event<th class="n">Amount<th>Notes</tr>${L.map(reportRow).join('') || '<tr><td colspan="8" class="mute">No transactions match this report period.</td></tr>'}</table></div>` },
+      Settings() {
+        return `<div class="card"><b>Your data</b><p class="mute">Saved to typed cloud tables and shared with everyone who can sign in. Existing data stays in the legacy records table until migration. Run <b>supabase-migration.sql</b> once in Supabase to copy it without deleting anything. Backups cover all records; receipt photos stay in cloud storage.</p><div class="row"><button class="p" onclick="backup()">Download backup (.json)</button><button class="s" onclick="csv()">Export CSV</button><button class="s" onclick="sb.auth.signOut().then(boot)">Sign out</button><label class="s" style="border:1px solid var(--ink);padding:8px 14px;border-radius:8px;color:var(--ink);cursor:pointer">Restore backup<input type="file" accept=".json" hidden onchange="restore(this.files[0])"></label></div></div>
+  <div class="card"><b>Auto-fill from receipt photos</b><p class="mute">Paste an Anthropic API key and receipts are read automatically (vendor, date, total, location, reason). The key stays in this browser and is sent only to Anthropic. Without a key, photos are still stored with each transaction.</p><input type="password" id="key" placeholder="sk-ant-..." value="${localStorage.getItem('bf_key') || ''}" onchange="localStorage.setItem('bf_key',this.value.trim())"></div>
+  <div class="card"><b>Categories</b><p class="mute">Comma separated.</p><input value="${D.cats.join(', ')}" onchange="D.cats=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()"></div>`
+      }
+    };
+    // ---- dialogs
+    const opt = (a, v, k) => a.map(x => `<option value="${x.id || x}" ${(x.id || x) == v ? 'selected' : ''}>${x.name || x}</option>`).join('');
+    let pend = null;
+    async function edit(id) {
+      const t = D.tx.find(x => x.id == id) || { type: 'expense', date: new Date().toISOString().slice(0, 10), amt: '', acct: D.acc[0].id, cat: D.cats[1] };
+      pend = { rid: t.rid, img: null, del: false }; const img = t.rid ? await rget(t.rid) : null;
+      $('#dlg').innerHTML = `<div class="f"><label>Type<select id="t_type" onchange="$('#t_to').parentElement.style.display=this.value=='payment'?'':'none'"><option value="expense" ${t.type == 'expense' ? 'selected' : ''}>Expense</option><option value="income" ${t.type == 'income' ? 'selected' : ''}>Revenue</option><option value="payment" ${t.type == 'payment' ? 'selected' : ''}>Card payment</option></select></label>
   <label>Date<input type="date" id="t_date" value="${t.date}"></label>
   <label>Amount<input type="number" step="0.01" id="t_amt" value="${t.amt}"></label>
-  <label>${'Account / card used'}<select id="t_acct">${opt(D.acc,t.acct)}</select></label>
-  <label style="display:${t.type=='payment'?'':'none'}">Card being paid<select id="t_to">${opt(D.acc.filter(a=>a.kind=='credit'),t.to)}</select></label>
-  <label>Vendor / source<input id="t_vendor" value="${t.vendor||''}"></label>
-  <label>Location<input id="t_loc" value="${t.loc||''}"></label>
-  <label>Category<select id="t_cat">${opt(D.cats,t.cat)}</select></label>
-  <label>Event<select id="t_ev"><option value="">None</option>${opt(D.ev,t.ev)}</select></label>
-  <label class="w">Reason / notes<textarea id="t_note" rows="2">${t.note||''}</textarea></label>
-  <label class="w">Receipt photo<input type="file" accept="image/*" onchange="pickImg(this.files[0])"><span id="t_st" class="mute"></span><img id="t_img" class="thumb" ${img?`src="${img}"`:'hidden'}></label></div>
-  <div class="row" style="margin:16px 0 0"><button class="p" onclick="saveTx('${t.id||''}')">Save</button><button class="s" onclick="$('#dlg').close()">Cancel</button>${t.id?`<button class="s" style="margin-left:auto;color:var(--r)" onclick="delTx('${t.id}')">Delete</button>`:''}</div>`;
-  $('#dlg').showModal();}
-async function pickImg(f){if(!f)return;const u=await shrink(f);pend.img=u;$('#t_img').src=u;$('#t_img').hidden=false;
-  if(!localStorage.getItem('bf_key')){$('#t_st').textContent=' Stored. Add an API key in Settings to auto-fill.';return}
-  $('#t_st').textContent=' Reading receipt…';
-  try{const r=await scan(u);const s=(i,v)=>{if(v&&!$(i).value)$(i).value=v};s('#t_vendor',r.vendor);s('#t_date',r.date);$('#t_date').value=r.date||$('#t_date').value;s('#t_amt',r.amount);s('#t_loc',r.location);s('#t_note',r.note);if(D.cats.includes(r.category))$('#t_cat').value=r.category;$('#t_st').textContent=' Filled in. Check the details before saving.'}
-  catch(e){$('#t_st').textContent=' Could not read this receipt. Fill in by hand.'}}
-async function saveTx(id){const v=i=>$(i).value,type=v('#t_type');if(!+v('#t_amt')){$('#t_amt').focus();return}
-  const t=D.tx.find(x=>x.id==id)||{id:uid()};Object.assign(t,{type,date:v('#t_date'),amt:+v('#t_amt'),acct:v('#t_acct'),to:type=='payment'?v('#t_to'):'',vendor:v('#t_vendor'),loc:v('#t_loc'),cat:type=='payment'?'':v('#t_cat'),ev:v('#t_ev'),note:v('#t_note')});
-  if(pend.img){t.rid=t.rid||uid();await rput(t.rid,pend.img)}
-  if(!D.tx.includes(t))D.tx.push(t);save();$('#dlg').close();render()}
-async function delTx(id){if(!confirm('Delete this transaction and its receipt?'))return;const t=D.tx.find(x=>x.id==id);if(t.rid)await rdel(t.rid);D.tx=D.tx.filter(x=>x.id!=id);save();$('#dlg').close();render()}
-function editEv(id){const e=D.ev.find(x=>x.id==id)||{date:new Date().toISOString().slice(0,10),name:''};
-  $('#dlg').innerHTML=`<div class="f"><label>Name<input id="e_n" value="${e.name}" placeholder="Saturday market"></label><label>Date<input type="date" id="e_d" value="${e.date}"></label></div><div class="row" style="margin:16px 0 0"><button class="p" onclick="saveEv('${e.id||''}')">Save</button><button class="s" onclick="$('#dlg').close()">Cancel</button>${e.id?`<button class="s" style="margin-left:auto;color:var(--r)" onclick="D.ev=D.ev.filter(x=>x.id!='${e.id}');save();$('#dlg').close();render()">Delete</button>`:''}</div>`;$('#dlg').showModal()}
-function saveEv(id){const e=D.ev.find(x=>x.id==id)||{id:uid()};e.name=$('#e_n').value||'Event';e.date=$('#e_d').value;if(!D.ev.includes(e))D.ev.push(e);save();$('#dlg').close();render()}
-function editAcc(id){const a=D.acc.find(x=>x.id==id)||{name:'',kind:'credit'};
-  $('#dlg').innerHTML=`<div class="f"><label>Name<input id="a_n" value="${a.name}"></label><label>Type<select id="a_k" ${a.id?'disabled':''}><option value="debit" ${a.kind=='debit'?'selected':''}>Debit / bank</option><option value="credit" ${a.kind=='credit'?'selected':''}>Credit card</option></select></label></div><div class="row" style="margin:16px 0 0"><button class="p" onclick="saveAcc('${a.id||''}')">Save</button><button class="s" onclick="$('#dlg').close()">Cancel</button></div>`;$('#dlg').showModal()}
-function saveAcc(id){const a=D.acc.find(x=>x.id==id)||{id:uid()};a.name=$('#a_n').value||'Account';a.kind=$('#a_k').value;if(!D.acc.includes(a))D.acc.push(a);save();$('#dlg').close();render()}
-function pay(){const c=D.acc.find(a=>a.kind=='credit');if(!c)return editAcc();edit();setTimeout(()=>{$('#t_type').value='payment';$('#t_type').onchange.call($('#t_type'));$('#t_acct').value=(D.acc.find(a=>a.kind=='debit')||D.acc[0]).id},0)}
-// ---- backup
-const dl=(name,blob)=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click()};
-function backup(){dl('ledger-backup-'+new Date().toISOString().slice(0,10)+'.json',new Blob([JSON.stringify({D})]))}
-async function restore(f){if(!f||!confirm('Replace all current data with this backup?'))return;const j=JSON.parse(await f.text());D=j.D;await save();render()}
-function csv(){const q=s=>'"'+String(s||'').replace(/"/g,'""')+'"';const rows=[['Date','Type','Amount','Account','Vendor','Location','Category','Event','Notes'],...D.tx.map(t=>[t.date,t.type,t.amt,acc(t.acct).name+(t.to?' > '+acc(t.to).name:''),t.vendor,t.loc,t.cat,evn(t.ev),t.note])];dl('transactions.csv',new Blob([rows.map(r=>r.map(q).join(',')).join('\n')]))}
-boot();addEventListener('focus',()=>{if(!$('#dlg').open)sb.auth.getSession().then(r=>r.data.session&&load())});
-</script></body></html>
+  <label>${'Account / card used'}<select id="t_acct">${opt(D.acc, t.acct)}</select></label>
+  <label style="display:${t.type == 'payment' ? '' : 'none'}">Card being paid<select id="t_to">${opt(D.acc.filter(a => a.kind == 'credit'), t.to)}</select></label>
+  <label>Vendor / source<input id="t_vendor" value="${t.vendor || ''}"></label>
+  <label>Location<input id="t_loc" value="${t.loc || ''}"></label>
+  <label>Category<select id="t_cat">${opt(D.cats, t.cat)}</select></label>
+  <label>Event<select id="t_ev"><option value="">None</option>${opt(D.ev, t.ev)}</select></label>
+  <label class="w">Reason / notes<textarea id="t_note" rows="2">${t.note || ''}</textarea></label>
+  <label class="w">Receipt photo<input type="file" accept="image/*" onchange="pickImg(this.files[0])"><span id="t_st" class="mute"></span><img id="t_img" class="thumb" ${img ? `src="${img}"` : 'hidden'}></label></div>
+  <div class="row" style="margin:16px 0 0"><button class="p" onclick="saveTx('${t.id || ''}')">Save</button><button class="s" onclick="$('#dlg').close()">Cancel</button>${t.id ? `<button class="s" style="margin-left:auto;color:var(--r)" onclick="delTx('${t.id}')">Delete</button>` : ''}</div>`;
+      $('#dlg').showModal();
+    }
+    async function pickImg(f) {
+      if (!f) return; const u = await shrink(f); pend.img = u; $('#t_img').src = u; $('#t_img').hidden = false;
+      if (!localStorage.getItem('bf_key')) { $('#t_st').textContent = ' Stored. Add an API key in Settings to auto-fill.'; return }
+      $('#t_st').textContent = ' Reading receipt…';
+      try { const r = await scan(u); const s = (i, v) => { if (v && !$(i).value) $(i).value = v }; s('#t_vendor', r.vendor); s('#t_date', r.date); $('#t_date').value = r.date || $('#t_date').value; s('#t_amt', r.amount); s('#t_loc', r.location); s('#t_note', r.note); if (D.cats.includes(r.category)) $('#t_cat').value = r.category; $('#t_st').textContent = ' Filled in. Check the details before saving.' }
+      catch (e) { $('#t_st').textContent = ' Could not read this receipt. Fill in by hand.' }
+    }
+    async function saveTx(id) {
+      const v = i => $(i).value, type = v('#t_type'); if (!+v('#t_amt')) { $('#t_amt').focus(); return }
+      const t = D.tx.find(x => x.id == id) || { id: uid() }; Object.assign(t, { type, date: v('#t_date'), amt: +v('#t_amt'), acct: v('#t_acct'), to: type == 'payment' ? v('#t_to') : '', vendor: v('#t_vendor'), loc: v('#t_loc'), cat: type == 'payment' ? '' : v('#t_cat'), ev: v('#t_ev'), note: v('#t_note') });
+      if (pend.img) { t.rid = t.rid || uid(); await rput(t.rid, pend.img) }
+      if (!D.tx.includes(t)) D.tx.push(t); save(); $('#dlg').close(); render()
+    }
+    async function delTx(id) { if (!confirm('Delete this transaction and its receipt?')) return; const t = D.tx.find(x => x.id == id); if (t.rid) await rdel(t.rid); D.tx = D.tx.filter(x => x.id != id); save(); $('#dlg').close(); render() }
+    function editEv(id) {
+      const e = D.ev.find(x => x.id == id) || { date: new Date().toISOString().slice(0, 10), name: '' };
+      $('#dlg').innerHTML = `<div class="f"><label>Name<input id="e_n" value="${e.name}" placeholder="Saturday market"></label><label>Date<input type="date" id="e_d" value="${e.date}"></label></div><div class="row" style="margin:16px 0 0"><button class="p" onclick="saveEv('${e.id || ''}')">Save</button><button class="s" onclick="$('#dlg').close()">Cancel</button>${e.id ? `<button class="s" style="margin-left:auto;color:var(--r)" onclick="D.ev=D.ev.filter(x=>x.id!='${e.id}');save();$('#dlg').close();render()">Delete</button>` : ''}</div>`; $('#dlg').showModal()
+    }
+    function saveEv(id) { const e = D.ev.find(x => x.id == id) || { id: uid() }; e.name = $('#e_n').value || 'Event'; e.date = $('#e_d').value; if (!D.ev.includes(e)) D.ev.push(e); save(); $('#dlg').close(); render() }
+    function editAcc(id) {
+      const a = D.acc.find(x => x.id == id) || { name: '', kind: 'credit' };
+      $('#dlg').innerHTML = `<div class="f"><label>Name<input id="a_n" value="${a.name}"></label><label>Type<select id="a_k" ${a.id ? 'disabled' : ''}><option value="debit" ${a.kind == 'debit' ? 'selected' : ''}>Debit / bank</option><option value="credit" ${a.kind == 'credit' ? 'selected' : ''}>Credit card</option></select></label></div><div class="row" style="margin:16px 0 0"><button class="p" onclick="saveAcc('${a.id || ''}')">Save</button><button class="s" onclick="$('#dlg').close()">Cancel</button></div>`; $('#dlg').showModal()
+    }
+    function saveAcc(id) { const a = D.acc.find(x => x.id == id) || { id: uid() }; a.name = $('#a_n').value || 'Account'; a.kind = $('#a_k').value; if (!D.acc.includes(a)) D.acc.push(a); save(); $('#dlg').close(); render() }
+    function pay() { const c = D.acc.find(a => a.kind == 'credit'); if (!c) return editAcc(); edit(); setTimeout(() => { $('#t_type').value = 'payment'; $('#t_type').onchange.call($('#t_type')); $('#t_acct').value = (D.acc.find(a => a.kind == 'debit') || D.acc[0]).id }, 0) }
+    // ---- backup
+    const dl = (name, blob) => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click() };
+    function backup() { dl('ledger-backup-' + new Date().toISOString().slice(0, 10) + '.json', new Blob([JSON.stringify({ D })])) }
+    async function restore(f) { if (!f || !confirm('Replace all current data with this backup?')) return; const j = JSON.parse(await f.text()); D = j.D; await save(); render() }
+    function csv() { const q = s => '"' + String(s || '').replace(/"/g, '""') + '"'; const rows = [['Date', 'Type', 'Amount', 'Account', 'Vendor', 'Location', 'Category', 'Event', 'Notes'], ...D.tx.map(t => [t.date, t.type, t.amt, acc(t.acct).name + (t.to ? ' > ' + acc(t.to).name : ''), t.vendor, t.loc, t.cat, evn(t.ev), t.note])]; dl('transactions.csv', new Blob([rows.map(r => r.map(q).join(',')).join('\n')])) }
+    function reportPeriod() { if (filterMode == 'custom') return `${customStart || 'Beginning'} to ${customEnd || 'Present'}`; return filterYear && filterMonth ? new Date(`${month}-02`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : filterYear ? `All months in ${filterYear}` : 'All transactions' }
+    function reportRows() { return D.tx.filter(inM).sort((a, b) => b.date.localeCompare(a.date)).map(t => ({ Date: t.date, Type: t.type === 'income' ? 'Revenue' : t.type === 'expense' ? 'Expense' : 'Card payment', Amount: t.amt, Account: acc(t.acct).name + (t.to ? ' > ' + acc(t.to).name : ''), 'Vendor / source': t.vendor || '', Location: t.loc || '', Category: t.cat || '', Event: evn(t.ev) || '', Notes: t.note || '' })) }
+    function reportRow(t) { const type = t.type === 'income' ? 'Revenue' : t.type === 'expense' ? 'Expense' : 'Card payment'; return `<tr><td>${t.date}<td>${type}<td>${t.vendor || ''}<td>${t.cat || ''}<td>${acc(t.acct).name}${t.to ? ' → ' + acc(t.to).name : ''}<td>${evn(t.ev)}<td class="n ${t.type == 'income' ? 'pos' : t.type == 'expense' ? 'neg' : ''}">${t.type == 'income' ? '+' : t.type == 'expense' ? '-' : ''}${fm(t.amt)}<td>${t.note || ''}</tr>` }
+    function exportExcel() { const rows = reportRows(), s = sums(D.tx.filter(inM)), headers = Object.keys(rows[0] || { Date: '', Type: '', Amount: '', Account: '', 'Vendor / source': '', Location: '', Category: '', Event: '', Notes: '' }), summary = [['Ledger financial report'], ['Period', reportPeriod()], [], ['Summary', 'Amount'], ['Revenue', s.i], ['Expenses', s.e], ['Net profit', s.n], [], headers, ...rows.map(r => headers.map(h => r[h]))], wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet(summary); ws['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 24 }, { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 22 }, { wch: 36 }]; XLSX.utils.book_append_sheet(wb, ws, 'Transactions'); XLSX.writeFile(wb, `ledger-report-${new Date().toISOString().slice(0, 10)}.xlsx`) }
+    function printReport() { const rows = reportRows(), s = sums(D.tx.filter(inM)), w = window.open('', '_blank'); if (!w) return alert('Allow pop-ups to export the PDF report.'); w.document.write(`<!doctype html><title>Ledger report</title><style>body{font:14px Arial;color:#17231d;padding:28px}h1{margin:0 0 4px}p{color:#64736a}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{text-align:left;padding:7px;border-bottom:1px solid #ddd}th:last-child,td:last-child{text-align:right}.summary{display:flex;gap:32px;margin-top:24px}.summary b{display:block;font-size:20px;margin-top:4px}.pos{color:#1f6b4a}.neg{color:#b3402e}</style><h1>Ledger financial report</h1><p>${reportPeriod()} · Generated ${new Date().toLocaleDateString()}</p><div class="summary"><div>Revenue<b class="pos">${fm(s.i)}</b></div><div>Expenses<b class="neg">${fm(s.e)}</b></div><div>Net profit<b>${fm(s.n)}</b></div></div><table><tr><th>Date</th><th>Type</th><th>Vendor / source</th><th>Category</th><th>Account</th><th>Event</th><th>Amount</th><th>Notes</th></tr>${rows.map(t => `<tr><td>${t.Date}</td><td>${t.Type}</td><td>${t['Vendor / source']}</td><td>${t.Category}</td><td>${t.Account}</td><td>${t.Event}</td><td>${fm(t.Amount)}</td><td>${t.Notes}</td></tr>`).join('')}</table>`); w.document.close(); w.focus(); w.print() }
+    boot(); addEventListener('focus', () => { if (!$('#dlg').open) sb.auth.getSession().then(r => r.data.session && load()) });
+  </script>
+</body>
+
+</html>
