@@ -47,16 +47,33 @@ let D=def, tab='Dashboard', month=initialMonth, filterYear=initialMonth.slice(0,
 const SUPABASE_URL='https://wdjmnostrphjiefqcgry.supabase.co', SUPABASE_KEY='sb_publishable_R__tdfAewsx6tCA-S24tZg_kmKv4YzQ';
 // =============================================
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
-let snap={};
-const recs=()=>[...D.acc.map(x=>['acc',x]),...D.ev.map(x=>['ev',x]),...D.tx.map(x=>['tx',x]),['cfg',{id:'cats',list:D.cats}]].map(([k,x])=>({id:k+':'+x.id,kind:k,data:x}));
-async function save(){const R=recs(),now={};R.forEach(r=>now[r.id]=JSON.stringify(r.data));
-  const up=R.filter(r=>snap[r.id]!==now[r.id]),del=Object.keys(snap).filter(i=>!(i in now));
-  if(up.length){const{error}=await sb.from('records').upsert(up);if(error)return alert('Not saved: '+error.message)}
-  if(del.length)await sb.from('records').delete().in('id',del);snap=now}
-async function load(){const{data,error}=await sb.from('records').select('id,kind,data');if(error)return alert('Could not load: '+error.message);
-  const g=k=>data.filter(r=>r.kind==k).map(r=>r.data),c=g('cfg')[0];
-  D={acc:g('acc'),ev:g('ev'),tx:g('tx'),cats:c?c.list:def.cats};if(!D.acc.length)D.acc=def.acc;
-  snap={};data.forEach(r=>snap[r.id]=JSON.stringify(r.data));await save();render()}
+let snap={},legacyMode=false;
+const tableRows=()=>({
+  accounts:D.acc,
+  events:D.ev,
+  categories:D.cats.map(name=>({name})),
+  transactions:D.tx.map(t=>({id:t.id,type:t.type,date:t.date,amt:t.amt,acct:t.acct,to_account:t.to||null,vendor:t.vendor||'',loc:t.loc||'',cat:t.cat||'',event_id:t.ev||null,note:t.note||'',receipt_id:t.rid||null}))
+});
+const rowKey=(table,row)=>table=='categories'?'categories:'+row.name:table+':'+row.id;
+async function save(){const rows=tableRows(),now={};Object.entries(rows).forEach(([table,list])=>list.forEach(row=>now[rowKey(table,row)]=JSON.stringify(row)));
+  if(legacyMode){const R=[...D.acc.map(x=>['acc',x]),...D.ev.map(x=>['ev',x]),...D.tx.map(x=>['tx',x]),['cfg',{id:'cats',list:D.cats}]].map(([kind,data])=>({id:kind+':'+data.id,kind,data}));
+    const oldNow={};R.forEach(r=>oldNow[r.id]=JSON.stringify(r.data));const up=R.filter(r=>snap[r.id]!==oldNow[r.id]),del=Object.keys(snap).filter(id=>!(id in oldNow));
+    if(up.length){const{error}=await sb.from('records').upsert(up);if(error)return alert('Not saved: '+error.message)}if(del.length)await sb.from('records').delete().in('id',del);snap=oldNow;return}
+  for(const [table,list] of Object.entries(rows)){const up=list.filter(row=>snap[rowKey(table,row)]!==JSON.stringify(row));
+    if(up.length){const{error}=await sb.from(table).upsert(up);if(error)return alert('Not saved: '+error.message)}}
+  for(const table of Object.keys(rows)){const ids=Object.keys(snap).filter(key=>key.startsWith(table+':')&&!now[key]).map(key=>key.slice(table.length+1));
+    if(ids.length){const{error}=await sb.from(table).delete().in(table=='categories'?'name':'id',ids);if(error)return alert('Not saved: '+error.message)}}
+  snap=now}
+function setLegacyData(data){const g=k=>data.filter(r=>r.kind==k).map(r=>r.data),c=g('cfg')[0];
+  D={acc:g('acc'),ev:g('ev'),tx:g('tx'),cats:c?c.list:def.cats};if(!D.acc.length)D.acc=def.acc}
+async function load(){const result=await Promise.all(['accounts','events','categories','transactions'].map(table=>sb.from(table).select('*')));
+  if(result.some(r=>r.error)){const legacy=await sb.from('records').select('id,kind,data');if(legacy.error)return alert('Could not load: '+result.find(r=>r.error).error.message);legacyMode=true;setLegacyData(legacy.data);snap={};legacy.data.forEach(r=>snap[r.id]=JSON.stringify(r.data));return render()}
+  const[accounts,events,categories,transactions]=result.map(r=>r.data);
+  if(!accounts.length&&!events.length&&!categories.length&&!transactions.length){const legacy=await sb.from('records').select('id,kind,data');
+    if(legacy.data&&legacy.data.length){setLegacyData(legacy.data);snap={};legacyMode=false;await save();return render()}}
+  legacyMode=false;
+  D={acc:accounts,ev:events,tx:transactions.map(t=>({...t,to:t.to_account||'',ev:t.event_id||'',rid:t.receipt_id||''})),cats:categories.map(c=>c.name)};if(!D.acc.length)D.acc=def.acc;if(!D.cats.length)D.cats=def.cats;
+  snap={};Object.entries(tableRows()).forEach(([table,list])=>list.forEach(row=>snap[rowKey(table,row)]=JSON.stringify(row)));render()}
 async function boot(){const{data:{session}}=await sb.auth.getSession();if(!session)return loginUI();await load()}
 function loginUI(){$('#nav').innerHTML='';$('#m').innerHTML=`<div class="card" style="max-width:360px;margin:40px auto"><b>Sign in</b><div class="f"><label class="w">Email<input id="li_e" type="email" autocomplete="username"></label><label class="w">Password<input id="li_p" type="password" autocomplete="current-password" onkeydown="if(event.key=='Enter')login()"></label></div><div class="row" style="margin:12px 0 0"><button class="p" onclick="login()">Sign in</button></div><p id="li_m" class="neg"></p></div>`}
 async function login(){const{error}=await sb.auth.signInWithPassword({email:$('#li_e').value,password:$('#li_p').value});if(error)$('#li_m').textContent=error.message;else boot()}
@@ -100,7 +117,7 @@ Events(){const L=D.ev.filter(inM).sort((a,b)=>b.date.localeCompare(a.date));
   ${pick.length?`<div class="card"><b>${pick.length} selected:</b> revenue <span class="pos">${fm(tot.i)}</span> · costs <span class="neg">${fm(tot.e)}</span> · net <b>${fm(tot.i-tot.e)}</b></div>`:''}
   <div class="card"><table><tr><th><th>Date<th>Event<th class="n">Revenue<th class="n">Costs<th class="n">Net<th></tr>${L.map(e=>{const s=row(e);return`<tr><td><input type="checkbox" style="width:auto" ${sel.has(e.id)?'checked':''} onchange="this.checked?sel.add('${e.id}'):sel.delete('${e.id}');render()"><td>${e.date}<td>${e.name}<td class="n pos">${fm(s.i)}<td class="n neg">${fm(s.e)}<td class="n">${fm(s.n)}<td><button class="s" onclick="editEv('${e.id}')">Edit</button></tr>`}).join('')||'<tr><td colspan=7 class="mute">No events this period. Tick events to total them together.</tr>'}</table></div>`},
 Accounts(){return`<div class="row"><button class="p" onclick="editAcc()">Add account or card</button><button class="s" onclick="pay()">Pay off a card</button></div><div class="card"><table><tr><th>Name<th>Type<th class="n">Balance<th></tr>${D.acc.map(a=>`<tr><td>${a.name}<td>${a.kind}<td class="n">${fm(bal(a))}<td><button class="s" onclick="editAcc('${a.id}')">Rename</button></tr>`).join('')}</table></div><p class="mute">Credit card balance = what you owe. Charge purchases to the card, then record a card payment from your debit account to lower it.</p>`},
-Settings(){return`<div class="card"><b>Your data</b><p class="mute">Saved to your cloud database and shared with everyone who can sign in. Backups cover all records; receipt photos stay in cloud storage.</p><div class="row"><button class="p" onclick="backup()">Download backup (.json)</button><button class="s" onclick="csv()">Export CSV</button><button class="s" onclick="sb.auth.signOut().then(boot)">Sign out</button><label class="s" style="border:1px solid var(--ink);padding:8px 14px;border-radius:8px;color:var(--ink);cursor:pointer">Restore backup<input type="file" accept=".json" hidden onchange="restore(this.files[0])"></label></div></div>
+Settings(){return`<div class="card"><b>Your data</b><p class="mute">Saved to typed cloud tables and shared with everyone who can sign in. Existing data stays in the legacy records table until migration. Run <b>supabase-migration.sql</b> once in Supabase to copy it without deleting anything. Backups cover all records; receipt photos stay in cloud storage.</p><div class="row"><button class="p" onclick="backup()">Download backup (.json)</button><button class="s" onclick="csv()">Export CSV</button><button class="s" onclick="sb.auth.signOut().then(boot)">Sign out</button><label class="s" style="border:1px solid var(--ink);padding:8px 14px;border-radius:8px;color:var(--ink);cursor:pointer">Restore backup<input type="file" accept=".json" hidden onchange="restore(this.files[0])"></label></div></div>
   <div class="card"><b>Auto-fill from receipt photos</b><p class="mute">Paste an Anthropic API key and receipts are read automatically (vendor, date, total, location, reason). The key stays in this browser and is sent only to Anthropic. Without a key, photos are still stored with each transaction.</p><input type="password" id="key" placeholder="sk-ant-..." value="${localStorage.getItem('bf_key')||''}" onchange="localStorage.setItem('bf_key',this.value.trim())"></div>
   <div class="card"><b>Categories</b><p class="mute">Comma separated.</p><input value="${D.cats.join(', ')}" onchange="D.cats=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()"></div>`}};
 // ---- dialogs
