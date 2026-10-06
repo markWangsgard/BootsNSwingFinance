@@ -80,7 +80,7 @@ function sums(list){let i=0,e=0;list.forEach(t=>{if(t.type=='income')i+=t.amt;if
 function render(){
   $('#nav').innerHTML=['Dashboard','Transactions','Events','Accounts','Settings'].map(t=>`<button class="${t==tab?'on':''}" onclick="tab='${t}';render()">${t}</button>`).join('');
   $('#m').innerHTML=V[tab]();}
-const mfilter=()=>`<div class="row"><label>Month <input type="month" value="${month}" onchange="month=this.value;render()" style="width:auto"></label><button class="s" onclick="month='';render()">All time</button></div>`;
+const mfilter=()=>{const months=new Set([new Date().toISOString().slice(0,7)]);[...D.tx,...D.ev].forEach(x=>{if(x.date)months.add(x.date.slice(0,7))});for(let i=1;i<12;i++){const d=new Date();d.setMonth(d.getMonth()-i);months.add(d.toISOString().slice(0,7))}const labels=[...months].sort().reverse().map(v=>{const d=new Date(v+'-02');return`<option value="${v}" ${month==v?'selected':''}>${d.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</option>`}).join('');return`<div class="row"><label>Month <select onchange="month=this.value;render()" style="width:auto"><option value="" ${!month?'selected':''}>All time</option>${labels}</select></label></div>`};
 const V={
 Dashboard(){const L=D.tx.filter(inM),s=sums(L),cat={};L.filter(t=>t.type=='expense').forEach(t=>cat[t.cat||'Other']=(cat[t.cat||'Other']||0)+t.amt);
   const mx=Math.max(1,...Object.values(cat));
