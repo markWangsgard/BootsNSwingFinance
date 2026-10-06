@@ -43,7 +43,7 @@ const fm=n=>(n<0?'-':'')+'$'+Math.abs(n).toLocaleString(undefined,{minimumFracti
 const def={acc:[{id:'a1',name:'Business Debit',kind:'debit'},{id:'a2',name:'Business Credit Card',kind:'credit'}],ev:[],tx:[],cats:['Sales','Supplies','Food & Ingredients','Booth/Venue Fees','Fuel & Travel','Equipment','Marketing','Software','Insurance & Fees','Other']};
 let D=def, tab='Dashboard', month=new Date().toISOString().slice(0,7), sel=new Set();
 // ===== PASTE YOUR SUPABASE SETTINGS HERE =====
-const SUPABASE_URL='https://YOUR-PROJECT.supabase.co', SUPABASE_KEY='YOUR-PUBLISHABLE-OR-ANON-KEY';
+const SUPABASE_URL='https://wdjmnostrphjiefqcgry.supabase.co', SUPABASE_KEY='sb_publishable_R__tdfAewsx6tCA-S24tZg_kmKv4YzQ';
 // =============================================
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 let snap={};
