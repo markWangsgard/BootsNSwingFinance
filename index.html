@@ -41,7 +41,8 @@ dialog::backdrop{background:#0008}
 const $=s=>document.querySelector(s),uid=()=>Math.random().toString(36).slice(2,9);
 const fm=n=>(n<0?'-':'')+'$'+Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const def={acc:[{id:'a1',name:'Business Debit',kind:'debit'},{id:'a2',name:'Business Credit Card',kind:'credit'}],ev:[],tx:[],cats:['Sales','Supplies','Food & Ingredients','Booth/Venue Fees','Fuel & Travel','Equipment','Marketing','Software','Insurance & Fees','Other']};
-let D=def, tab='Dashboard', month=new Date().toISOString().slice(0,7), sel=new Set();
+const initialMonth=new Date().toISOString().slice(0,7);
+let D=def, tab='Dashboard', month=initialMonth, filterYear=initialMonth.slice(0,4), filterMonth=initialMonth.slice(5), filterMode='preset', customStart='', customEnd='', sel=new Set();
 // ===== PASTE YOUR SUPABASE SETTINGS HERE =====
 const SUPABASE_URL='https://wdjmnostrphjiefqcgry.supabase.co', SUPABASE_KEY='sb_publishable_R__tdfAewsx6tCA-S24tZg_kmKv4YzQ';
 // =============================================
@@ -74,13 +75,17 @@ const acc=id=>D.acc.find(a=>a.id==id)||{name:'(deleted)'},evn=id=>(D.ev.find(e=>
 function bal(a){let b=0;D.tx.forEach(t=>{
   if(a.kind=='credit'){if(t.acct==a.id&&t.type=='expense')b+=t.amt;if(t.to==a.id)b-=t.amt;if(t.acct==a.id&&t.type=='income')b-=t.amt}
   else{if(t.acct==a.id){b+=t.type=='income'?t.amt:-t.amt}if(t.to==a.id)b+=t.amt}});return b}
-const inM=t=>!month||t.date.startsWith(month);
+const inM=t=>filterMode=='custom'?(!customStart||t.date>=customStart)&&(!customEnd||t.date<=customEnd):!month||t.date.startsWith(month);
 function sums(list){let i=0,e=0;list.forEach(t=>{if(t.type=='income')i+=t.amt;if(t.type=='expense')e+=t.amt});return{i,e,n:i-e}}
 // ---- views
 function render(){
   $('#nav').innerHTML=['Dashboard','Transactions','Events','Accounts','Settings'].map(t=>`<button class="${t==tab?'on':''}" onclick="tab='${t}';render()">${t}</button>`).join('');
   $('#m').innerHTML=V[tab]();}
-const mfilter=()=>{const months=new Set([new Date().toISOString().slice(0,7)]);[...D.tx,...D.ev].forEach(x=>{if(x.date)months.add(x.date.slice(0,7))});for(let i=1;i<12;i++){const d=new Date();d.setMonth(d.getMonth()-i);months.add(d.toISOString().slice(0,7))}const labels=[...months].sort().reverse().map(v=>{const d=new Date(v+'-02');return`<option value="${v}" ${month==v?'selected':''}>${d.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</option>`}).join('');return`<div class="row"><label>Month <select onchange="month=this.value;render()" style="width:auto"><option value="" ${!month?'selected':''}>All time</option>${labels}</select></label></div>`};
+function setMonthFilter(){filterYear=$('#filter_year').value;filterMonth=$('#filter_month').value;filterMode='preset';month=filterYear&&filterMonth?filterYear+'-'+filterMonth:'';render()}
+function setFilterMode(){filterMode=$('#filter_mode').value;render()}
+function applyCustomFilter(){customStart=$('#filter_start').value;customEnd=$('#filter_end').value;month='';filterMode='custom';render()}
+function clearFilter(){filterYear='';filterMonth='';month='';customStart='';customEnd='';filterMode='preset';render()}
+const mfilter=()=>{const years=new Set([new Date().getFullYear()]);[...D.tx,...D.ev].forEach(x=>{if(x.date)years.add(+x.date.slice(0,4))});const yearOptions=[...years].sort((a,b)=>b-a).map(y=>`<option value="${y}" ${filterYear==y?'selected':''}>${y}</option>`).join('');const monthOptions=Array.from({length:12},(_,i)=>{const value=String(i+1).padStart(2,'0');return`<option value="${value}" ${filterMonth==value?'selected':''}>${new Date(2000,i,2).toLocaleDateString(undefined,{month:'long'})}</option>`}).join('');const controls=filterMode=='preset'?`<label>Month <select id="filter_month" onchange="setMonthFilter()" style="width:auto"><option value="" ${!filterMonth?'selected':''}>All months</option>${monthOptions}</select></label><label>Year <select id="filter_year" onchange="setMonthFilter()" style="width:auto"><option value="" ${!filterYear?'selected':''}>All years</option>${yearOptions}</select></label>`:`<label>Start date <input id="filter_start" type="date" value="${customStart}" style="width:auto"></label><label>End date <input id="filter_end" type="date" value="${customEnd}" style="width:auto"></label><button class="p" onclick="applyCustomFilter()">Apply date range</button>`;return`<div class="row"><label>Filter by <select id="filter_mode" onchange="setFilterMode()" style="width:auto"><option value="preset" ${filterMode=='preset'?'selected':''}>Month and year</option><option value="custom" ${filterMode=='custom'?'selected':''}>Custom date range</option></select></label>${controls}<button class="s" onclick="clearFilter()">Clear filters</button></div>`};
 const V={
 Dashboard(){const L=D.tx.filter(inM),s=sums(L),cat={};L.filter(t=>t.type=='expense').forEach(t=>cat[t.cat||'Other']=(cat[t.cat||'Other']||0)+t.amt);
   const mx=Math.max(1,...Object.values(cat));
@@ -89,7 +94,7 @@ Dashboard(){const L=D.tx.filter(inM),s=sums(L),cat={};L.filter(t=>t.type=='expen
   <div class="card"><b>Spending by category</b>${Object.entries(cat).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="margin-top:10px"><div class="row" style="justify-content:space-between;margin:0"><span>${k}</span><span>${fm(v)}</span></div><div class="bar" style="width:${v/mx*100}%"></div></div>`).join('')||'<p class="mute">No expenses this period. Add one under Transactions.</p>'}</div>`},
 Transactions(){const L=D.tx.filter(inM).sort((a,b)=>b.date.localeCompare(a.date));
   return mfilter()+`<div class="row"><button class="p" onclick="edit()">Add transaction</button></div><div class="card"><table><tr><th>Date<th>Vendor<th>Category<th>Account<th>Event<th class="n">Amount<th></tr>${L.map(t=>`<tr class="c" onclick="edit('${t.id}')"><td>${t.date}<td>${t.vendor||(t.type=='payment'?'Card payment':'')}<td>${t.cat||''}<td>${acc(t.acct).name}${t.to?' → '+acc(t.to).name:''}<td>${evn(t.ev)}<td class="n ${t.type=='income'?'pos':t.type=='expense'?'neg':''}">${t.type=='income'?'+':t.type=='expense'?'-':''}${fm(t.amt)}<td>${t.rid?'📎':''}</tr>`).join('')||'<tr><td colspan=7 class="mute">Nothing here yet.</tr>'}</table></div>`},
-Events(){const L=D.ev.filter(e=>!month||e.date.startsWith(month)).sort((a,b)=>b.date.localeCompare(a.date));
+Events(){const L=D.ev.filter(inM).sort((a,b)=>b.date.localeCompare(a.date));
   const row=e=>sums(D.tx.filter(t=>t.ev==e.id)),pick=L.filter(e=>sel.has(e.id)),tot=pick.reduce((a,e)=>{const s=row(e);return{i:a.i+s.i,e:a.e+s.e}},{i:0,e:0});
   return mfilter()+`<div class="row"><button class="p" onclick="editEv()">Add event</button></div>
   ${pick.length?`<div class="card"><b>${pick.length} selected:</b> revenue <span class="pos">${fm(tot.i)}</span> · costs <span class="neg">${fm(tot.e)}</span> · net <b>${fm(tot.i-tot.e)}</b></div>`:''}
